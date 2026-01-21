@@ -1,4 +1,4 @@
-name = "render"
+name = "cdn-nightsquawk-tech"
 main = "src/index.ts"
 compatibility_date = "2022-05-15"
 # Set this to false if you don't want to use the default *.workers.dev route.
