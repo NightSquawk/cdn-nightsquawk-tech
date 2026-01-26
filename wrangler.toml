@@ -59,7 +59,7 @@ DIRECTORY_LISTING_DEFAULT = "hide"
 # Comma-separated list of paths that always show listings (no R2 cost).
 # Example: "public/,downloads/,assets/" - include "" for root.
 # Paths are prefix-matched, so "public/" includes "public/images/".
-PUBLIC_DIRECTORIES = ""
+PUBLIC_DIRECTORIES = ","
 
 # Enable .public marker file checking for dynamic directory visibility control.
 # When enabled, directories containing a .public file will be visible.
