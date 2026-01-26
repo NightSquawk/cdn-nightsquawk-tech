@@ -13,6 +13,11 @@ export interface Env {
   DIRECTORY_CACHE_CONTROL?: string;
   LOGGING?: boolean;
   R2_RETRIES?: number;
+  DIRECTORY_LISTING_DEFAULT?: "show" | "hide";
+  PUBLIC_DIRECTORIES?: string;
+  ENABLE_PUBLIC_MARKER?: boolean;
+  PUBLIC_MARKER_FILE?: string;
+  PUBLIC_MARKER_CACHE_TTL?: number;
 }
 
 const units = ["B", "KB", "MB", "GB", "TB"];
@@ -37,6 +42,56 @@ function getRangeHeader(range: ParsedRange, fileSize: number): string {
   return `bytes ${hasSuffix(range) ? fileSize - range.suffix : range.offset}-${
     hasSuffix(range) ? fileSize - 1 : range.offset + range.length - 1
   }/${fileSize}`;
+}
+
+async function isDirectoryVisible(
+  path: string,
+  env: Env,
+  ctx: ExecutionContext,
+  cache: Cache
+): Promise<boolean> {
+  // Normalize path
+  let normalizedPath = path;
+  if (normalizedPath.startsWith("/")) normalizedPath = normalizedPath.substring(1);
+  if (normalizedPath !== "" && !normalizedPath.endsWith("/")) normalizedPath += "/";
+
+  // Legacy mode: show all
+  if (env.DIRECTORY_LISTING_DEFAULT === "show") return true;
+
+  // Check config whitelist (FREE - no R2)
+  if (env.PUBLIC_DIRECTORIES) {
+    const whitelist = env.PUBLIC_DIRECTORIES.split(",").map(p => p.trim());
+    for (const allowed of whitelist) {
+      if (normalizedPath === allowed || normalizedPath.startsWith(allowed)) {
+        return true;
+      }
+    }
+  }
+
+  // Optional: Check marker file with caching
+  if (env.ENABLE_PUBLIC_MARKER) {
+    const markerFile = env.PUBLIC_MARKER_FILE || ".public";
+    const markerPath = normalizedPath + markerFile;
+
+    // Check cache first
+    const cacheKey = new Request(`https://marker-cache/${markerPath}`);
+    const cached = await cache.match(cacheKey);
+    if (cached) return (await cached.text()) === "true";
+
+    // R2 HEAD operation
+    const marker = await env.R2_BUCKET.head(markerPath);
+    const isVisible = marker !== null;
+
+    // Cache result
+    const ttl = env.PUBLIC_MARKER_CACHE_TTL || 300;
+    ctx.waitUntil(cache.put(cacheKey, new Response(String(isVisible), {
+      headers: { "cache-control": `max-age=${ttl}` }
+    })));
+
+    return isVisible;
+  }
+
+  return false; // Default: hidden
 }
 
 // some ideas for this were taken from / inspired by
@@ -231,6 +286,10 @@ export default {
           path += env.INDEX_FILE;
           triedIndex = true;
         } else if (env.DIRECTORY_LISTING) {
+          const isVisible = await isDirectoryVisible(path, env, ctx, cache);
+          if (!isVisible) {
+            return new Response("Directory listing not available", { status: 403 });
+          }
           // return the dir listing
           let listResponse = await makeListingResponse(path, env, request);
 
@@ -360,6 +419,10 @@ export default {
         }
 
         if (env.DIRECTORY_LISTING && (path.endsWith("/") || path === "")) {
+          const isVisible = await isDirectoryVisible(path, env, ctx, cache);
+          if (!isVisible) {
+            return new Response("Directory listing not available", { status: 403 });
+          }
           // return the dir listing
           let listResponse = await makeListingResponse(path, env, request);
 

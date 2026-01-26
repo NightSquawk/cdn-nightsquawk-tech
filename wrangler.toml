@@ -51,6 +51,26 @@ LOGGING = true
 # Set the number of retries allowed for each R2 operation (-1 for unlimited).
 R2_RETRIES = 0
 
+# Directory visibility control: "hide" (default) or "show"
+# "hide" = directories hidden unless whitelisted or marked with .public file
+# "show" = all directories visible (legacy behavior)
+DIRECTORY_LISTING_DEFAULT = "hide"
+
+# Comma-separated list of paths that always show listings (no R2 cost).
+# Example: "public/,downloads/,assets/" - include "" for root.
+# Paths are prefix-matched, so "public/" includes "public/images/".
+PUBLIC_DIRECTORIES = ""
+
+# Enable .public marker file checking for dynamic directory visibility control.
+# When enabled, directories containing a .public file will be visible.
+ENABLE_PUBLIC_MARKER = false
+
+# Filename used as the visibility marker (default: ".public").
+PUBLIC_MARKER_FILE = ".public"
+
+# Cache TTL in seconds for marker file checks (default: 300).
+PUBLIC_MARKER_CACHE_TTL = 300
+
 [observability]
 enabled = true
 
