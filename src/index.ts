@@ -62,7 +62,10 @@ async function isDirectoryVisible(
   if (env.PUBLIC_DIRECTORIES) {
     const whitelist = env.PUBLIC_DIRECTORIES.split(",").map(p => p.trim());
     for (const allowed of whitelist) {
-      if (normalizedPath === allowed || normalizedPath.startsWith(allowed)) {
+      // Empty string = root only, non-empty = exact match or prefix match
+      if (allowed === "") {
+        if (normalizedPath === "") return true;
+      } else if (normalizedPath === allowed || normalizedPath.startsWith(allowed)) {
         return true;
       }
     }
