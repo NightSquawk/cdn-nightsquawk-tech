@@ -63,7 +63,7 @@ PUBLIC_DIRECTORIES = ","
 
 # Enable .public marker file checking for dynamic directory visibility control.
 # When enabled, directories containing a .public file will be visible.
-ENABLE_PUBLIC_MARKER = false
+ENABLE_PUBLIC_MARKER = true
 
 # Filename used as the visibility marker (default: ".public").
 PUBLIC_MARKER_FILE = ".public"
