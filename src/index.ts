@@ -252,7 +252,10 @@ export default {
     if (allowedMethods.indexOf(request.method) === -1) {
       return new Response("Method Not Allowed", {
         status: 405,
-        headers: { allow: allowedMethods.join(", ") },
+        headers: {
+          allow: allowedMethods.join(", "),
+          "content-type": "text/plain",
+        },
       });
     }
 
@@ -291,7 +294,10 @@ export default {
         } else if (env.DIRECTORY_LISTING) {
           const isVisible = await isDirectoryVisible(path, env, ctx, cache);
           if (!isVisible) {
-            return new Response("Directory listing not available", { status: 403 });
+            return new Response("Directory listing not available", {
+              status: 403,
+              headers: { "content-type": "text/plain" },
+            });
           }
           // return the dir listing
           let listResponse = await makeListingResponse(path, env, request);
@@ -317,7 +323,10 @@ export default {
         if (rangeHeader) {
           file = await retryAsync(env, () => env.R2_BUCKET.head(path));
           if (file === null)
-            return new Response("File Not Found", { status: 404 });
+            return new Response("File Not Found", {
+              status: 404,
+              headers: { "content-type": "text/plain" },
+            });
           const parsedRanges = parseRange(file.size, rangeHeader);
           // R2 only supports 1 range at the moment, reject if there is more than one
           if (
@@ -335,7 +344,10 @@ export default {
                     length: firstRange.end - firstRange.start + 1,
                   };
           } else {
-            return new Response("Range Not Satisfiable", { status: 416 });
+            return new Response("Range Not Satisfiable", {
+              status: 416,
+              headers: { "content-type": "text/plain" },
+            });
           }
         }
       }
@@ -380,7 +392,10 @@ export default {
         );
 
         if (file && !hasBody(file)) {
-          return new Response("Precondition Failed", { status: 412 });
+          return new Response("Precondition Failed", {
+            status: 412,
+            headers: { "content-type": "text/plain" },
+          });
         }
       }
 
@@ -424,7 +439,10 @@ export default {
         if (env.DIRECTORY_LISTING && (path.endsWith("/") || path === "")) {
           const isVisible = await isDirectoryVisible(path, env, ctx, cache);
           if (!isVisible) {
-            return new Response("Directory listing not available", { status: 403 });
+            return new Response("Directory listing not available", {
+              status: 403,
+              headers: { "content-type": "text/plain" },
+            });
           }
           // return the dir listing
           let listResponse = await makeListingResponse(path, env, request);
@@ -449,7 +467,10 @@ export default {
         // if it's still null, either 404 is disabled or that file wasn't found either
         // this isn't an else because then there would have to be two of them
         if (file == null) {
-          return new Response("File Not Found", { status: 404 });
+          return new Response("File Not Found", {
+            status: 404,
+            headers: { "content-type": "text/plain" },
+          });
         }
       }
 
