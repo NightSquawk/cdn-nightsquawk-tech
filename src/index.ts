@@ -22,6 +22,33 @@ export interface Env {
 
 const units = ["B", "KB", "MB", "GB", "TB"];
 
+function isOriginAllowed(origin: string | null, allowedOrigins: string): string {
+  if (!origin || !allowedOrigins) return "";
+
+  const patterns = allowedOrigins.split(",").map(p => p.trim()).filter(p => p);
+
+  for (const pattern of patterns) {
+    // Exact match
+    if (pattern === origin) return origin;
+
+    // Wildcard subdomain match (e.g., *.example.com)
+    if (pattern.startsWith("*.")) {
+      const domain = pattern.slice(1); // Remove the *
+      // Check if origin ends with the domain (e.g., sub.example.com matches *.example.com)
+      try {
+        const originUrl = new URL(origin);
+        if (originUrl.host.endsWith(domain) || originUrl.host === domain.slice(1)) {
+          return origin;
+        }
+      } catch {
+        // Invalid origin URL, skip
+      }
+    }
+  }
+
+  return "";
+}
+
 type ParsedRange = { offset: number; length: number } | { suffix: number };
 
 function rangeHasLength(
@@ -209,10 +236,11 @@ ${htmlList.join("\n")}
   `;
   }
 
+  const allowedOrigin = isOriginAllowed(request.headers.get("origin"), env.ALLOWED_ORIGINS || "");
   return new Response(html === "" ? null : html, {
     status: 200,
     headers: {
-      "access-control-allow-origin": env.ALLOWED_ORIGINS || "",
+      "access-control-allow-origin": allowedOrigin,
       "last-modified": lastModified === null ? "" : lastModified.toUTCString(),
       "content-type": "text/html",
       "cache-control": env.DIRECTORY_CACHE_CONTROL || "no-store",
@@ -485,11 +513,12 @@ export default {
         file.body.pipeTo(writable);
         body = readable;
       }
+      const allowedOrigin = isOriginAllowed(request.headers.get("origin"), env.ALLOWED_ORIGINS || "");
       response = new Response(body, {
         status: notFound ? 404 : range ? 206 : 200,
         headers: {
           "accept-ranges": "bytes",
-          "access-control-allow-origin": env.ALLOWED_ORIGINS || "",
+          "access-control-allow-origin": allowedOrigin,
 
           etag: notFound ? "" : file.httpEtag,
           // if the 404 file has a custom cache control, we respect it
