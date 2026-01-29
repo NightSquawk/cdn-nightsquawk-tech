@@ -23,7 +23,12 @@ export interface Env {
 const units = ["B", "KB", "MB", "GB", "TB"];
 
 function isOriginAllowed(origin: string | null, allowedOrigins: string): string {
-  if (!origin || !allowedOrigins) return "";
+  if (!allowedOrigins) return "";
+
+  // Allow all origins
+  if (allowedOrigins.trim() === "*") return "*";
+
+  if (!origin) return "";
 
   const patterns = allowedOrigins.split(",").map(p => p.trim()).filter(p => p);
 
