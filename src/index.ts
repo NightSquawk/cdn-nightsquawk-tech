@@ -282,19 +282,27 @@ export default {
     ctx: ExecutionContext
   ): Promise<Response> {
     const allowedMethods = ["GET", "HEAD", "OPTIONS"];
+    const corsOrigin = isOriginAllowed(request.headers.get("origin"), env.ALLOWED_ORIGINS || "");
+
     if (allowedMethods.indexOf(request.method) === -1) {
       return new Response("Method Not Allowed", {
         status: 405,
         headers: {
           allow: allowedMethods.join(", "),
           "content-type": "text/plain",
+          "access-control-allow-origin": corsOrigin,
         },
       });
     }
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
-        headers: { allow: allowedMethods.join(", ") },
+        headers: {
+          allow: allowedMethods.join(", "),
+          "access-control-allow-origin": corsOrigin,
+          "access-control-allow-methods": allowedMethods.join(", "),
+          "access-control-allow-headers": "*",
+        },
       });
     }
 
@@ -329,7 +337,7 @@ export default {
           if (!isVisible) {
             return new Response("Directory listing not available", {
               status: 403,
-              headers: { "content-type": "text/plain" },
+              headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
             });
           }
           // return the dir listing
@@ -358,7 +366,7 @@ export default {
           if (file === null)
             return new Response("File Not Found", {
               status: 404,
-              headers: { "content-type": "text/plain" },
+              headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
             });
           const parsedRanges = parseRange(file.size, rangeHeader);
           // R2 only supports 1 range at the moment, reject if there is more than one
@@ -379,7 +387,7 @@ export default {
           } else {
             return new Response("Range Not Satisfiable", {
               status: 416,
-              headers: { "content-type": "text/plain" },
+              headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
             });
           }
         }
@@ -427,7 +435,7 @@ export default {
         if (file && !hasBody(file)) {
           return new Response("Precondition Failed", {
             status: 412,
-            headers: { "content-type": "text/plain" },
+            headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
           });
         }
       }
@@ -450,7 +458,7 @@ export default {
           );
         }
         if (file && !hasBody(file)) {
-          return new Response(null, { status: 304 });
+          return new Response(null, { status: 304, headers: { "access-control-allow-origin": corsOrigin } });
         }
       }
 
@@ -474,7 +482,7 @@ export default {
           if (!isVisible) {
             return new Response("Directory listing not available", {
               status: 403,
-              headers: { "content-type": "text/plain" },
+              headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
             });
           }
           // return the dir listing
@@ -502,7 +510,7 @@ export default {
         if (file == null) {
           return new Response("File Not Found", {
             status: 404,
-            headers: { "content-type": "text/plain" },
+            headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
           });
         }
       }
@@ -518,12 +526,11 @@ export default {
         file.body.pipeTo(writable);
         body = readable;
       }
-      const allowedOrigin = isOriginAllowed(request.headers.get("origin"), env.ALLOWED_ORIGINS || "");
       response = new Response(body, {
         status: notFound ? 404 : range ? 206 : 200,
         headers: {
           "accept-ranges": "bytes",
-          "access-control-allow-origin": allowedOrigin,
+          "access-control-allow-origin": corsOrigin,
 
           etag: notFound ? "" : file.httpEtag,
           // if the 404 file has a custom cache control, we respect it
