@@ -2,6 +2,9 @@ import parseRange from "range-parser";
 
 export interface Env {
   R2_BUCKET: R2Bucket;
+  CDN_RATE_LIMITER?: RateLimit;
+  DIRECTORY_RATE_LIMITER?: RateLimit;
+  RATE_LIMITING?: boolean;
   ALLOWED_ORIGINS?: string;
   CACHE_CONTROL?: string;
   PATH_PREFIX?: string;
@@ -18,6 +21,25 @@ export interface Env {
   ENABLE_PUBLIC_MARKER?: boolean;
   PUBLIC_MARKER_FILE?: string;
   PUBLIC_MARKER_CACHE_TTL?: number;
+}
+
+type RequestStats = { cache: "BYPASS" | "HIT" | "MISS" };
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, char => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[char]!));
+}
+
+function objectPath(pathname: string, env: Env): string {
+  const prefix = (env.PATH_PREFIX || "").replace(/^\/+|\/+$/g, "");
+  return (prefix ? prefix + "/" : "") + pathname.replace(/^\/+/, "");
+}
+
+function errorResponse(message: string, status: number): Response {
+  return new Response(message, { status, headers: {
+    "content-type": "text/plain; charset=utf-8", "cache-control": "no-store",
+  } });
 }
 
 const units = ["B", "KB", "MB", "GB", "TB"];
@@ -80,7 +102,8 @@ async function isDirectoryVisible(
   path: string,
   env: Env,
   ctx: ExecutionContext,
-  cache: Cache
+  cache: Cache,
+  request: Request
 ): Promise<boolean> {
   // Normalize path
   let normalizedPath = path;
@@ -97,7 +120,7 @@ async function isDirectoryVisible(
       // Empty string = root only, non-empty = exact match or prefix match
       if (allowed === "") {
         if (normalizedPath === "") return true;
-      } else if (normalizedPath === allowed || normalizedPath.startsWith(allowed)) {
+      } else if (normalizedPath.startsWith(allowed.replace(/^\/+|\/+$/g, "") + "/")) {
         return true;
       }
     }
@@ -109,12 +132,15 @@ async function isDirectoryVisible(
     const markerPath = normalizedPath + markerFile;
 
     // Check cache first
-    const cacheKey = new Request(`https://marker-cache/${markerPath}`);
+    const markerUrl = new URL(request.url);
+    markerUrl.pathname = "/.cdn-marker-cache/v1/" + encodeURIComponent(markerPath);
+    markerUrl.search = "";
+    const cacheKey = new Request(markerUrl);
     const cached = await cache.match(cacheKey);
     if (cached) return (await cached.text()) === "true";
 
     // R2 HEAD operation
-    const marker = await env.R2_BUCKET.head(markerPath);
+    const marker = await retryAsync(env, () => env.R2_BUCKET.head(markerPath));
     const isVisible = marker !== null;
 
     // Cache result
@@ -140,13 +166,16 @@ async function makeListingResponse(
   else if (path !== "" && !path.endsWith("/")) {
     path += "/";
   }
-  let cursor = new URL(request.url).searchParams.get("cursor") || undefined;
-  let listing = await env.R2_BUCKET.list({
+  const url = new URL(request.url);
+  const cursor = url.searchParams.get("cursor") || undefined;
+  const maxItems = Math.max(1, Math.min(1000, Math.floor(env.ITEMS_PER_PAGE || 1000)));
+  if (cursor && cursor.length > 4096) return errorResponse("Invalid cursor", 400);
+  let listing = await retryAsync(env, () => env.R2_BUCKET.list({
     prefix: path,
     delimiter: "/",
     cursor,
-    limit: env.ITEMS_PER_PAGE || 1000,
-  });
+    limit: maxItems,
+  }));
 
   if (listing.delimitedPrefixes.length === 0 && listing.objects.length === 0) {
     return null;
@@ -158,7 +187,7 @@ async function makeListingResponse(
   if (request.method === "GET") {
     let htmlList = [];
 
-    if (path !== "") {
+    if (url.pathname !== "/") {
       htmlList.push(
         `      <tr>` +
           `<td><a href="../">../</a></td>` +
@@ -172,7 +201,7 @@ async function makeListingResponse(
       if (name.startsWith(".") && env.HIDE_HIDDEN_FILES) continue;
       htmlList.push(
         `      <tr>` +
-          `<td><a href="${encodeURIComponent(name)}/">${name}/</a></td>` +
+          `<td><a href="${encodeURIComponent(name)}/">${escapeHtml(name)}/</a></td>` +
           `<td>-</td><td>-</td></tr>`
       );
     }
@@ -186,7 +215,7 @@ async function makeListingResponse(
 
       htmlList.push(
         `      <tr>` +
-          `<td><a href="${encodeURIComponent(name)}">${name}</a></td>` +
+          `<td><a href="${encodeURIComponent(name)}">${escapeHtml(name)}</a></td>` +
           `<td>${dateStr}</td><td>${niceBytes(file.size)}</td></tr>`
       );
 
@@ -198,7 +227,7 @@ async function makeListingResponse(
     if (listing.truncated) {
       htmlList.push(
         `      <tr>` +
-          `<td><a href="?cursor=${listing.cursor}">...see more.../</a></td>` +
+          `<td><a href="?cursor=${encodeURIComponent(listing.cursor)}">...see more.../</a></td>` +
           `<td>-</td><td>-</td></tr>`
       );
     }
@@ -208,7 +237,7 @@ async function makeListingResponse(
     html = `<!DOCTYPE html>
 <html>
   <head>
-    <title>Index of ${path}</title>
+    <title>Index of ${escapeHtml(decodeURIComponent(url.pathname))}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta charset="utf-8">
     <style>
@@ -231,7 +260,7 @@ async function makeListingResponse(
     </style>
   </head>
   <body>
-    <h1>Index of ${path}</h1>
+    <h1>Index of ${escapeHtml(decodeURIComponent(url.pathname))}</h1>
     <table>
       <tr><th>Filename</th><th>Modified</th><th>Size</th></tr>
 ${htmlList.join("\n")}
@@ -247,7 +276,8 @@ ${htmlList.join("\n")}
     headers: {
       "access-control-allow-origin": allowedOrigin,
       "last-modified": lastModified === null ? "" : lastModified.toUTCString(),
-      "content-type": "text/html",
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
       "cache-control": env.DIRECTORY_CACHE_CONTROL || "no-store",
     },
   });
@@ -275,11 +305,12 @@ async function retryAsync<T>(env: Env, fn: () => Promise<T>): Promise<T> {
   throw new Error("unreachable");
 }
 
-export default {
+const originHandler = {
   async fetch(
     request: Request,
     env: Env,
-    ctx: ExecutionContext
+    ctx: ExecutionContext,
+    stats: RequestStats
   ): Promise<Response> {
     const allowedMethods = ["GET", "HEAD", "OPTIONS"];
     const corsOrigin = isOriginAllowed(request.headers.get("origin"), env.ALLOWED_ORIGINS || "");
@@ -312,8 +343,15 @@ export default {
 
     const isCachingEnabled = env.CACHE_CONTROL !== "no-store";
     const cache = caches.default;
-    if (isCachingEnabled) {
-      response = await cache.match(request);
+    const requestUrl = new URL(request.url);
+    const decodedPath = decodeURIComponent(requestUrl.pathname);
+    // Version the cache key so pre-existing HTML listings cannot bypass visibility checks.
+    const cacheUrl = new URL(request.url);
+    cacheUrl.pathname = "/.cdn-file-cache/v2/" + encodeURIComponent(objectPath(decodedPath, env));
+    const cacheRequest = new Request(cacheUrl, request);
+    if (isCachingEnabled && request.method === "GET") {
+      stats.cache = "MISS";
+      response = await cache.match(cacheRequest);
     }
 
     // Since we produce this result from the request, we don't need to strictly use an R2Range
@@ -321,32 +359,30 @@ export default {
 
     if (!response || !(response.ok || response.status == 304)) {
       if (env.LOGGING) {
-        console.warn("Cache MISS for", request.url);
+        console.warn("Cache MISS for", new URL(request.url).pathname);
       }
       const url = new URL(request.url);
-      let path = (env.PATH_PREFIX || "") + decodeURIComponent(url.pathname);
+      let path = objectPath(decodeURIComponent(url.pathname), env);
 
       // directory logic
-      if (path.endsWith("/")) {
+      if (decodedPath.endsWith("/")) {
         // if theres an index file, try that. 404 logic down below has dir fallback.
         if (env.INDEX_FILE && env.INDEX_FILE !== "") {
           path += env.INDEX_FILE;
           triedIndex = true;
         } else if (env.DIRECTORY_LISTING) {
-          const isVisible = await isDirectoryVisible(path, env, ctx, cache);
+          const isVisible = await isDirectoryVisible(path, env, ctx, cache, request);
           if (!isVisible) {
             return new Response("Directory listing not available", {
               status: 403,
               headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
             });
           }
+          stats.cache = "BYPASS";
           // return the dir listing
           let listResponse = await makeListingResponse(path, env, request);
 
           if (listResponse !== null) {
-            if (listResponse.headers.get("cache-control") !== "no-store") {
-              ctx.waitUntil(cache.put(request, listResponse.clone()));
-            }
             return listResponse;
           }
         }
@@ -478,20 +514,18 @@ export default {
         }
 
         if (env.DIRECTORY_LISTING && (path.endsWith("/") || path === "")) {
-          const isVisible = await isDirectoryVisible(path, env, ctx, cache);
+          const isVisible = await isDirectoryVisible(path, env, ctx, cache, request);
           if (!isVisible) {
             return new Response("Directory listing not available", {
               status: 403,
               headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
             });
           }
+          stats.cache = "BYPASS";
           // return the dir listing
           let listResponse = await makeListingResponse(path, env, request);
 
           if (listResponse !== null) {
-            if (listResponse.headers.get("cache-control") !== "no-store") {
-              ctx.waitUntil(cache.put(request, listResponse.clone()));
-            }
             return listResponse;
           }
         }
@@ -523,7 +557,7 @@ export default {
           contentLength = rangeHasLength(range) ? range.length : range.suffix;
         }
         let { readable, writable } = new FixedLengthStream(contentLength);
-        file.body.pipeTo(writable);
+        ctx.waitUntil(file.body.pipeTo(writable));
         body = readable;
       }
       response = new Response(body, {
@@ -552,14 +586,76 @@ export default {
       });
 
       if (request.method === "GET" && !range && isCachingEnabled && !notFound)
-        ctx.waitUntil(cache.put(request, response.clone()));
+        ctx.waitUntil(cache.put(cacheRequest, response.clone()));
     } else {
-      if (env.LOGGING) {
-        console.warn("Cache HIT for", request.url);
-      }
+      stats.cache = "HIT";
+      if (env.LOGGING) console.warn("Cache HIT for", new URL(request.url).pathname);
     }
 
     return response;
+  },
+};
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+    const stats: RequestStats = { cache: "BYPASS" };
+    let response: Response;
+
+    try {
+      // Cloudflare sets this header at ingress. Do not trust X-Forwarded-For.
+      // Missing client addresses share a fallback allowance (including local dev).
+      const key = "cdn-nightsquawk-tech:" + (request.headers.get("cf-connecting-ip") || "unknown");
+      const allowed = async (limiter: RateLimit | undefined) => {
+        if (!limiter) throw new Error("Missing rate limiting binding");
+        return (await limiter.limit({ key })).success;
+      };
+      if (env.RATE_LIMITING && !await allowed(env.CDN_RATE_LIMITER)) {
+        response = errorResponse("Too Many Requests", 429);
+      } else {
+        let pathname: string;
+        try {
+          pathname = decodeURIComponent(url.pathname);
+        } catch {
+          pathname = "";
+        }
+        if (!pathname || /[\u0000-\u001f\u007f]/.test(pathname)) {
+          response = errorResponse("Invalid URL path", 400);
+        } else if (env.RATE_LIMITING && pathname.endsWith("/") &&
+          (request.method === "GET" || request.method === "HEAD") &&
+          !await allowed(env.DIRECTORY_RATE_LIMITER)) {
+          response = errorResponse("Too Many Requests", 429);
+        } else {
+          response = await originHandler.fetch(request, env, ctx, stats);
+        }
+      }
+    } catch {
+      // Fail closed on limiter/storage failures; do not expose internal errors.
+      if (env.LOGGING) console.error("CDN request failed", { path: url.pathname });
+      response = errorResponse("Service Unavailable", 503);
+    }
+
+    // Apply CORS after cache lookup: cached files must not inherit another origin.
+    const headers = new Headers(response.headers);
+    const corsOrigin = isOriginAllowed(request.headers.get("origin"), env.ALLOWED_ORIGINS || "");
+    if (corsOrigin) headers.set("access-control-allow-origin", corsOrigin);
+    else headers.delete("access-control-allow-origin");
+    if (env.ALLOWED_ORIGINS?.trim() !== "*") {
+      const vary = headers.get("vary");
+      if (!vary?.split(",").some(value => value.trim().toLowerCase() === "origin")) {
+        headers.set("vary", vary ? vary + ", Origin" : "Origin");
+      }
+    }
+    headers.set("access-control-expose-headers", "ETag, Content-Range, Accept-Ranges, Retry-After, X-CDN-Cache");
+    headers.set("x-content-type-options", "nosniff");
+    headers.set("x-cdn-cache", stats.cache);
+    if (response.status === 429 || response.status === 503) headers.set("retry-after", "60");
+    let body = response.body;
+    if (request.method === "HEAD" && body) {
+      ctx.waitUntil(body.cancel());
+      body = null;
+    }
+    return new Response(body, { status: response.status, headers });
   },
 };
 

@@ -6,6 +6,9 @@ compatibility_date = "2022-05-15"
 workers_dev = true
 
 [vars]
+# Public CDN controls. Limits apply before cache/R2 reads; no login is required.
+RATE_LIMITING = true
+
 # The `access-control-allow-origin` header: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
 # Optional, the `access-control-allow-origin` header is omitted if unset, which blocks all cross-origin requests.
 ALLOWED_ORIGINS = "*"
@@ -79,3 +82,15 @@ binding = "R2_BUCKET"
 bucket_name = "cdn"         # Set this to your R2 bucket name. Required
 preview_bucket_name = "cdn" # Set this to your preview R2 bucket name. Can be equal to bucket_name. Optional
 #jurisdiction = "eu"        # Set this to "eu" or "us". Optional if the bucket has no jurisdiction restrictions
+
+# Account-unique namespaces; these counters are separate from Explorer management.
+# Each client's allowance is approximate and local to a Cloudflare location.
+[[ratelimits]]
+name = "CDN_RATE_LIMITER"
+namespace_id = "2026091301"
+simple = { limit = 600, period = 60 }
+
+[[ratelimits]]
+name = "DIRECTORY_RATE_LIMITER"
+namespace_id = "2026091302"
+simple = { limit = 60, period = 60 }
