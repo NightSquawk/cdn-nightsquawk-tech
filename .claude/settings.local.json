@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npx wrangler deploy:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "WebFetch(domain:cdn.nightsquawk.tech)",
+      "Bash(curl:*)",
+      "Bash(npm run:*)",
+      "Bash(pnpm exec tsc:*)"
+    ]
+  }
+}
