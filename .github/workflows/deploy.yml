@@ -19,6 +19,10 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Validate
+        run: |
+          pnpm run typecheck
+          pnpm test
       - name: Publish
         run: pnpm run deploy
         env:

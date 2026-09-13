@@ -12,7 +12,10 @@
   "scripts": {
     "dev": "wrangler dev --remote",
     "deploy": "wrangler deploy",
-    "prepublishOnly": "tsc"
+    "prepublishOnly": "tsc",
+    "typecheck": "tsc --noEmit",
+    "types": "wrangler types src/bindings.d.ts --env-interface CloudflareBindings --include-runtime=false --strict-vars=false",
+    "test": "node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260317.1",

@@ -1,4 +1,14 @@
-# Render
+# NightSquawk Public CDN
+
+NightSquawk's public, read-only CDN for the `cdn` R2 bucket, based on Render.
+Bucket management stays in [NightSquawk Explorer](https://github.com/NightSquawk/explorer-nightsquawk-tech).
+
+- Configurable rate limits for file traffic and directory browsing.
+- JSON directory listings: `GET /folder/?format=json`.
+- Private download analytics, including cache hits and range responses.
+
+See [Public CDN operations](docs/public-cdn.md) for configuration, API examples,
+analytics queries, and rollout details. The original Render setup guide follows.
 
 Proxies readonly requests to [Cloudflare R2](https://developers.cloudflare.com/r2) via [Cloudflare Workers](https://workers.dev).
 
