@@ -5,6 +5,7 @@ export interface Env {
   CDN_RATE_LIMITER?: RateLimit;
   DIRECTORY_RATE_LIMITER?: RateLimit;
   RATE_LIMITING?: boolean;
+  JSON_DIRECTORY_API?: boolean;
   ALLOWED_ORIGINS?: string;
   CACHE_CONTROL?: string;
   PATH_PREFIX?: string;
@@ -160,7 +161,8 @@ async function isDirectoryVisible(
 async function makeListingResponse(
   path: string,
   env: Env,
-  request: Request
+  request: Request,
+  json = false
 ): Promise<Response | null> {
   if (path === "/") path = "";
   else if (path !== "" && !path.endsWith("/")) {
@@ -169,13 +171,38 @@ async function makeListingResponse(
   const url = new URL(request.url);
   const cursor = url.searchParams.get("cursor") || undefined;
   const maxItems = Math.max(1, Math.min(1000, Math.floor(env.ITEMS_PER_PAGE || 1000)));
+  const requestedLimit = json ? url.searchParams.get("limit") : null;
   if (cursor && cursor.length > 4096) return errorResponse("Invalid cursor", 400);
+  if (requestedLimit !== null && (!/^[1-9][0-9]*$/.test(requestedLimit) || Number(requestedLimit) > maxItems)) {
+    return errorResponse(`limit must be an integer between 1 and ${maxItems}`, 400);
+  }
+  const limit = requestedLimit === null ? maxItems : Number(requestedLimit);
   let listing = await retryAsync(env, () => env.R2_BUCKET.list({
     prefix: path,
     delimiter: "/",
     cursor,
-    limit: maxItems,
+    limit,
   }));
+
+  if (json) {
+    const publicPath = decodeURIComponent(url.pathname);
+    const publicUrl = (name: string) => "/" + url.pathname.replace(/^\/+/, "") + encodeURIComponent(name);
+    const visible = (name: string) => name !== "" && !(env.HIDE_HIDDEN_FILES && name.startsWith("."));
+    const payload = {
+      path: publicPath,
+      directories: listing.delimitedPrefixes.map(prefix => prefix.slice(path.length).replace(/\/$/, ""))
+        .filter(visible).map(name => ({ name, url: publicUrl(name) + "/" })),
+      files: listing.objects.filter(file => visible(file.key.slice(path.length))).map(file => ({
+        name: file.key.slice(path.length), url: publicUrl(file.key.slice(path.length)),
+        size: file.size, uploaded: file.uploaded.toISOString(), etag: file.httpEtag,
+      })),
+      truncated: listing.truncated,
+      cursor: listing.truncated ? listing.cursor : null,
+    };
+    return new Response(request.method === "HEAD" ? null : JSON.stringify(payload), {
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
+  }
 
   if (listing.delimitedPrefixes.length === 0 && listing.objects.length === 0) {
     return null;
@@ -345,6 +372,16 @@ const originHandler = {
     const cache = caches.default;
     const requestUrl = new URL(request.url);
     const decodedPath = decodeURIComponent(requestUrl.pathname);
+    const wantsJson = requestUrl.searchParams.get("format") === "json";
+    if (wantsJson) {
+      if (!env.JSON_DIRECTORY_API || !env.DIRECTORY_LISTING) return errorResponse("JSON directory API not available", 404);
+      if (!decodedPath.endsWith("/")) return errorResponse("JSON listings require a directory path ending in /", 400);
+      const directoryPath = objectPath(decodedPath, env);
+      if (!await isDirectoryVisible(directoryPath, env, ctx, cache, request)) {
+        return errorResponse("Directory listing not available", 403);
+      }
+      return (await makeListingResponse(directoryPath, env, request, true))!;
+    }
     // Version the cache key so pre-existing HTML listings cannot bypass visibility checks.
     const cacheUrl = new URL(request.url);
     cacheUrl.pathname = "/.cdn-file-cache/v2/" + encodeURIComponent(objectPath(decodedPath, env));
@@ -599,6 +636,7 @@ const originHandler = {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const json = url.searchParams.get("format") === "json";
     const stats: RequestStats = { cache: "BYPASS" };
     let response: Response;
 
@@ -621,7 +659,7 @@ export default {
         }
         if (!pathname || /[\u0000-\u001f\u007f]/.test(pathname)) {
           response = errorResponse("Invalid URL path", 400);
-        } else if (env.RATE_LIMITING && pathname.endsWith("/") &&
+        } else if (env.RATE_LIMITING && (pathname.endsWith("/") || json) &&
           (request.method === "GET" || request.method === "HEAD") &&
           !await allowed(env.DIRECTORY_RATE_LIMITER)) {
           response = errorResponse("Too Many Requests", 429);
@@ -651,6 +689,17 @@ export default {
     headers.set("x-cdn-cache", stats.cache);
     if (response.status === 429 || response.status === 503) headers.set("retry-after", "60");
     let body = response.body;
+    if (json && response.status >= 400) {
+      const message = await response.text();
+      response = new Response(JSON.stringify({ error: message, status: response.status }), {
+        status: response.status,
+      });
+      body = response.body;
+      headers.set("content-type", "application/json; charset=utf-8");
+      headers.set("cache-control", "no-store");
+      headers.delete("content-length");
+    }
+
     if (request.method === "HEAD" && body) {
       ctx.waitUntil(body.cancel());
       body = null;
