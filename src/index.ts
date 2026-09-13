@@ -4,7 +4,9 @@ export interface Env {
   R2_BUCKET: R2Bucket;
   CDN_RATE_LIMITER?: RateLimit;
   DIRECTORY_RATE_LIMITER?: RateLimit;
+  DOWNLOAD_ANALYTICS?: AnalyticsEngineDataset;
   RATE_LIMITING?: boolean;
+  DOWNLOAD_ANALYTICS_ENABLED?: boolean;
   JSON_DIRECTORY_API?: boolean;
   ALLOWED_ORIGINS?: string;
   CACHE_CONTROL?: string;
@@ -24,7 +26,7 @@ export interface Env {
   PUBLIC_MARKER_CACHE_TTL?: number;
 }
 
-type RequestStats = { cache: "BYPASS" | "HIT" | "MISS" };
+type RequestStats = { resource: "other" | "file" | "directory"; cache: "BYPASS" | "HIT" | "MISS" };
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, char => ({
@@ -376,6 +378,7 @@ const originHandler = {
     if (wantsJson) {
       if (!env.JSON_DIRECTORY_API || !env.DIRECTORY_LISTING) return errorResponse("JSON directory API not available", 404);
       if (!decodedPath.endsWith("/")) return errorResponse("JSON listings require a directory path ending in /", 400);
+      stats.resource = "directory";
       const directoryPath = objectPath(decodedPath, env);
       if (!await isDirectoryVisible(directoryPath, env, ctx, cache, request)) {
         return errorResponse("Directory listing not available", 403);
@@ -415,6 +418,7 @@ const originHandler = {
               headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
             });
           }
+          stats.resource = "directory";
           stats.cache = "BYPASS";
           // return the dir listing
           let listResponse = await makeListingResponse(path, env, request);
@@ -558,6 +562,7 @@ const originHandler = {
               headers: { "content-type": "text/plain", "access-control-allow-origin": corsOrigin },
             });
           }
+          stats.resource = "directory";
           stats.cache = "BYPASS";
           // return the dir listing
           let listResponse = await makeListingResponse(path, env, request);
@@ -597,6 +602,7 @@ const originHandler = {
         ctx.waitUntil(file.body.pipeTo(writable));
         body = readable;
       }
+      stats.resource = notFound ? "other" : "file";
       response = new Response(body, {
         status: notFound ? 404 : range ? 206 : 200,
         headers: {
@@ -625,6 +631,7 @@ const originHandler = {
       if (request.method === "GET" && !range && isCachingEnabled && !notFound)
         ctx.waitUntil(cache.put(cacheRequest, response.clone()));
     } else {
+      stats.resource = "file";
       stats.cache = "HIT";
       if (env.LOGGING) console.warn("Cache HIT for", new URL(request.url).pathname);
     }
@@ -635,9 +642,10 @@ const originHandler = {
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const started = Date.now();
     const url = new URL(request.url);
     const json = url.searchParams.get("format") === "json";
-    const stats: RequestStats = { cache: "BYPASS" };
+    const stats: RequestStats = { resource: "other", cache: "BYPASS" };
     let response: Response;
 
     try {
@@ -700,6 +708,23 @@ export default {
       headers.delete("content-length");
     }
 
+    if (env.DOWNLOAD_ANALYTICS_ENABLED && env.DOWNLOAD_ANALYTICS &&
+      (request.method === "GET" || request.method === "HEAD")) {
+      const isDownload = stats.resource === "file" && request.method === "GET" &&
+        (response.status === 200 || response.status === 206);
+      const length = Number(headers.get("content-length") || 0);
+      try {
+        env.DOWNLOAD_ANALYTICS.writeDataPoint({
+          // No IP addresses, query strings, referrers, or credentials are recorded.
+          indexes: [url.hostname],
+          blobs: [url.pathname.slice(0, 2048), request.method, stats.resource, stats.cache],
+          doubles: [response.status, isDownload && Number.isFinite(length) ? length : 0,
+            Date.now() - started, isDownload ? 1 : 0],
+        });
+      } catch {
+        if (env.LOGGING) console.error("CDN analytics write failed");
+      }
+    }
     if (request.method === "HEAD" && body) {
       ctx.waitUntil(body.cancel());
       body = null;

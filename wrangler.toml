@@ -9,6 +9,7 @@ workers_dev = true
 # Public CDN controls. Limits apply before cache/R2 reads; no login is required.
 RATE_LIMITING = true
 JSON_DIRECTORY_API = true
+DOWNLOAD_ANALYTICS_ENABLED = true
 
 # The `access-control-allow-origin` header: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
 # Optional, the `access-control-allow-origin` header is omitted if unset, which blocks all cross-origin requests.
@@ -95,3 +96,7 @@ simple = { limit = 600, period = 60 }
 name = "DIRECTORY_RATE_LIMITER"
 namespace_id = "2026091302"
 simple = { limit = 60, period = 60 }
+
+[[analytics_engine_datasets]]
+binding = "DOWNLOAD_ANALYTICS"
+dataset = "cdn_downloads"
