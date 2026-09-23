@@ -173,3 +173,11 @@ dist
 
 .dev.vars
 .wrangler
+
+# Local agent/editor state (never publish)
+.claude/settings.local.json
+.specstory/
+.cursorindexingignore
+
+# pnpm is the only package manager; package-lock.json is not used
+package-lock.json

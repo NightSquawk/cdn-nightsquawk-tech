@@ -4,16 +4,24 @@ on:
   push:
     branches:
       - master
+  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     name: Deploy
     steps:
-      - uses: actions/checkout@v3
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -23,8 +31,10 @@ jobs:
         run: |
           pnpm run typecheck
           pnpm test
+      # Pull requests only validate; publishing needs the Cloudflare secrets.
       - name: Publish
+        if: github.event_name != 'pull_request'
         run: pnpm run deploy
         env:
+          # The target account is pinned by account_id in wrangler.toml.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
