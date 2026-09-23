@@ -1,5 +1,7 @@
 name = "cdn-nightsquawk-tech"
 main = "src/index.ts"
+# NightSquawk Tech account, which owns cdn.nightsquawk.tech. Pinned so deploys cannot land elsewhere.
+account_id = "94704372cb05354815c82bbb208fe0cb"
 compatibility_date = "2022-05-15"
 # Set this to false if you don't want to use the default *.workers.dev route.
 # Note that *.workers.dev routes don't support native worker-level caching: https://developers.cloudflare.com/workers/runtime-apis/cache/
